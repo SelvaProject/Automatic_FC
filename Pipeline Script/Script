@@ -1,0 +1,129 @@
+// Uses Declarative syntax to run commands inside a container.
+def handleExecution(envName, propertiesFile) {
+    // Define temporary file
+    def tempFile = "${WORKSPACE}/${envName}_credentials.properties"
+    
+    // Copy properties securely
+    sh """
+    set +x
+    cp ${propertiesFile} ${tempFile}
+    set -x
+    """
+    
+    // Execute the JAR using the temp file
+    sh """
+    set +x
+    java -DconfigFile=${tempFile} -jar AutomateCompilation/target/AutomateCompilation-SFDC-jar-with-dependencies.jar
+    set -x
+    """
+    
+    // Clean up temporary file
+    sh """
+    set +x
+    rm -f ${tempFile}
+    set -x
+    """
+}
+
+pipeline {
+    agent {
+        kubernetes {
+            cloud 'deploy'
+            inheritFrom 'salesforce-autocompile'
+            serviceAccount 'jenkins-cross-deploy-sa'
+        }
+    }
+
+    stages {
+        stage('Repository Clone') {
+            steps {
+                container('salesforce-autocompile') {
+                    checkout changelog: false,
+                             poll: false,
+                             scm: [$class: 'GitSCM',
+                                   branches: [[name: 'test']],
+                                   doGenerateSubmoduleConfigurations: false,
+                                   submoduleCfg: [],
+                                   userRemoteConfigs: [[credentialsId: 'github-ita-cicdbot',
+                                                        url: 'https://github.com/sky-uk/ita-automation-sfdc-fc-run.git']]
+                             ]
+                }
+            }
+        }
+
+        stage('Dependency Validation') {
+            steps {
+                container('salesforce-autocompile') {
+                    sh "java --version"
+                    sh "google-chrome --version"
+                    sh "chromedriver --version"
+                    sh "cat /etc/os-release"
+                }
+            }
+        }
+
+        stage('Compilation of Classes') {
+            parallel {
+                stage('UAT') {
+                    steps {
+                        container('salesforce-autocompile') {
+                            withCredentials([file(credentialsId: 'FULLPRJ', variable: 'UATProperties')]) {
+                                script {
+                                    handleExecution('UAT', UATProperties)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('AM') {
+                    steps {
+                        container('salesforce-autocompile') {
+                            withCredentials([file(credentialsId: 'FULLE2E', variable: 'AMProperties')]) {
+                                script {
+                                    handleExecution('AM', AMProperties)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('ST') {
+                    steps {
+                        container('salesforce-autocompile') {
+                            withCredentials([file(credentialsId: 'FULLBB', variable: 'STProperties')]) {
+                                script {
+                                    handleExecution('ST', STProperties)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('IT') {
+                    steps {
+                        container('salesforce-autocompile') {
+                            withCredentials([file(credentialsId: 'FULLAM', variable: 'ITProperties')]) {
+                                script {
+                                    handleExecution('IT', ITProperties)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('PT') {
+                    steps {
+                        container('salesforce-autocompile') {
+                            withCredentials([file(credentialsId: 'CHAIN2008', variable: 'PTProperties')]) {
+                                script {
+                                    handleExecution('PT', PTProperties)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
